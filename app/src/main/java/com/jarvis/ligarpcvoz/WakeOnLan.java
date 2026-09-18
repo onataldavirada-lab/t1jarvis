@@ -15,9 +15,7 @@ public final class WakeOnLan {
         byte[] mac = parseMac(MAC);
         byte[] packet = new byte[6 + 16 * mac.length];
 
-        for (int i = 0; i < 6; i++) {
-            packet[i] = (byte) 0xFF;
-        }
+        for (int i = 0; i < 6; i++) packet[i] = (byte) 0xFF;
 
         for (int i = 6; i < packet.length; i += mac.length) {
             System.arraycopy(mac, 0, packet, i, mac.length);
@@ -27,13 +25,7 @@ public final class WakeOnLan {
 
         try (DatagramSocket socket = new DatagramSocket()) {
             socket.setBroadcast(true);
-            DatagramPacket datagram = new DatagramPacket(
-                    packet,
-                    packet.length,
-                    address,
-                    PORT
-            );
-            socket.send(datagram);
+            socket.send(new DatagramPacket(packet, packet.length, address, PORT));
         }
     }
 

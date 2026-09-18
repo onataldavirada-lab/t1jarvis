@@ -6,15 +6,13 @@ import android.app.NotificationManager;
 import android.app.Service;
 import android.content.Intent;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
-
-import androidx.annotation.Nullable;
-import androidx.core.app.NotificationCompat;
 
 import java.text.Normalizer;
 import java.util.ArrayList;
@@ -34,6 +32,7 @@ public class VoiceService extends Service {
     private Intent recognizerIntent;
     private boolean stopping = false;
     private boolean listening = false;
+    private long lastWakeAt = 0L;
 
     @Override
     public void onCreate() {
@@ -46,7 +45,7 @@ public class VoiceService extends Service {
         );
 
         setupRecognizer();
-        startListeningDelayed(500);
+        startListeningDelayed(700);
     }
 
     private void setupRecognizer() {
@@ -57,71 +56,50 @@ public class VoiceService extends Service {
 
         recognizer = SpeechRecognizer.createSpeechRecognizer(this);
 
-        recognizerIntent = new Intent(
-                RecognizerIntent.ACTION_RECOGNIZE_SPEECH
-        );
-
+        recognizerIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         recognizerIntent.putExtra(
                 RecognizerIntent.EXTRA_LANGUAGE_MODEL,
                 RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
         );
-
-        recognizerIntent.putExtra(
-                RecognizerIntent.EXTRA_LANGUAGE,
-                "pt-BR"
-        );
-
-        recognizerIntent.putExtra(
-                RecognizerIntent.EXTRA_PARTIAL_RESULTS,
-                true
-        );
-
-        recognizerIntent.putExtra(
-                RecognizerIntent.EXTRA_MAX_RESULTS,
-                5
-        );
+        recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "pt-BR");
+        recognizerIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+        recognizerIntent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
 
         recognizer.setRecognitionListener(new RecognitionListener() {
-            @Override
-            public void onReadyForSpeech(android.os.Bundle params) {
+            @Override public void onReadyForSpeech(Bundle params) {
                 listening = true;
                 updateNotification("Ouvindo...");
             }
 
-            @Override
-            public void onBeginningOfSpeech() {}
+            @Override public void onBeginningOfSpeech() {}
+            @Override public void onRmsChanged(float rmsdB) {}
+            @Override public void onBufferReceived(byte[] buffer) {}
 
-            @Override
-            public void onRmsChanged(float rmsdB) {}
-
-            @Override
-            public void onBufferReceived(byte[] buffer) {}
-
-            @Override
-            public void onEndOfSpeech() {
+            @Override public void onEndOfSpeech() {
                 listening = false;
                 updateNotification("Processando...");
             }
 
-            @Override
-            public void onError(int error) {
+            @Override public void onError(int error) {
                 listening = false;
                 if (!stopping) {
-                    startListeningDelayed(error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY ? 1200 : 500);
+                    startListeningDelayed(
+                            error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY
+                                    ? 1400 : 700
+                    );
                 }
             }
 
-            @Override
-            public void onResults(android.os.Bundle results) {
+            @Override public void onResults(Bundle results) {
                 listening = false;
-                handleResults(results);
+                handleBundle(results);
+
                 if (!stopping) {
-                    startListeningDelayed(350);
+                    startListeningDelayed(500);
                 }
             }
 
-            @Override
-            public void onPartialResults(android.os.Bundle partialResults) {
+            @Override public void onPartialResults(Bundle partialResults) {
                 ArrayList<String> texts =
                         partialResults.getStringArrayList(
                                 SpeechRecognizer.RESULTS_RECOGNITION
@@ -129,18 +107,18 @@ public class VoiceService extends Service {
 
                 if (texts != null && containsTrigger(texts)) {
                     wakePc();
+
                     try {
                         recognizer.cancel();
                     } catch (Exception ignored) {}
                 }
             }
 
-            @Override
-            public void onEvent(int eventType, android.os.Bundle params) {}
+            @Override public void onEvent(int eventType, Bundle params) {}
         });
     }
 
-    private void handleResults(android.os.Bundle results) {
+    private void handleBundle(Bundle results) {
         ArrayList<String> texts =
                 results.getStringArrayList(
                         SpeechRecognizer.RESULTS_RECOGNITION
@@ -166,7 +144,6 @@ public class VoiceService extends Service {
                 return true;
             }
         }
-
         return false;
     }
 
@@ -183,11 +160,18 @@ public class VoiceService extends Service {
     }
 
     private void wakePc() {
+        long now = System.currentTimeMillis();
+
+        // Evita enviar várias vezes pelo mesmo comando parcial/final.
+        if (now - lastWakeAt < 5000) {
+            return;
+        }
+
+        lastWakeAt = now;
         updateNotification("Comando detectado — ligando PC");
 
         executor.execute(() -> {
             try {
-                // Envia três pacotes para aumentar a confiabilidade.
                 for (int i = 0; i < 3; i++) {
                     WakeOnLan.send();
                     Thread.sleep(150);
@@ -208,14 +192,12 @@ public class VoiceService extends Service {
 
     private void startListeningDelayed(long delayMs) {
         handler.postDelayed(() -> {
-            if (stopping || recognizer == null || listening) {
-                return;
-            }
+            if (stopping || recognizer == null || listening) return;
 
             try {
                 recognizer.startListening(recognizerIntent);
             } catch (Exception e) {
-                startListeningDelayed(1000);
+                startListeningDelayed(1200);
             }
         }, delayMs);
     }
@@ -228,9 +210,7 @@ public class VoiceService extends Service {
                     NotificationManager.IMPORTANCE_LOW
             );
 
-            channel.setDescription(
-                    "Mantém a escuta por voz ativa."
-            );
+            channel.setDescription("Mantém a escuta por voz ativa.");
 
             NotificationManager manager =
                     getSystemService(NotificationManager.class);
@@ -240,7 +220,15 @@ public class VoiceService extends Service {
     }
 
     private Notification buildNotification(String text) {
-        return new NotificationCompat.Builder(this, CHANNEL_ID)
+        Notification.Builder builder;
+
+        if (Build.VERSION.SDK_INT >= 26) {
+            builder = new Notification.Builder(this, CHANNEL_ID);
+        } else {
+            builder = new Notification.Builder(this);
+        }
+
+        return builder
                 .setSmallIcon(android.R.drawable.ic_btn_speak_now)
                 .setContentTitle("Ligar PC Voz")
                 .setContentText(text)
@@ -271,7 +259,6 @@ public class VoiceService extends Service {
     @Override
     public void onDestroy() {
         stopping = true;
-
         handler.removeCallbacksAndMessages(null);
 
         if (recognizer != null) {
@@ -287,7 +274,6 @@ public class VoiceService extends Service {
         super.onDestroy();
     }
 
-    @Nullable
     @Override
     public IBinder onBind(Intent intent) {
         return null;

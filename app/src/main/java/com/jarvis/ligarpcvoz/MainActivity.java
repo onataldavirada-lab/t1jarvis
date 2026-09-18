@@ -1,6 +1,7 @@
 package com.jarvis.ligarpcvoz;
 
 import android.Manifest;
+import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
@@ -11,22 +12,21 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.app.ActivityCompat;
-import androidx.core.content.ContextCompat;
-
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public class MainActivity extends AppCompatActivity {
+public class MainActivity extends Activity {
 
     private static final int REQ_PERMISSIONS = 1001;
     private TextView status;
+    private ExecutorService executor;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        executor = Executors.newSingleThreadExecutor();
 
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
@@ -78,9 +78,13 @@ public class MainActivity extends AppCompatActivity {
         });
 
         test.setOnClickListener(v ->
-                Executors.newSingleThreadExecutor().execute(() -> {
+                executor.execute(() -> {
                     try {
-                        WakeOnLan.send();
+                        for (int i = 0; i < 3; i++) {
+                            WakeOnLan.send();
+                            Thread.sleep(150);
+                        }
+
                         runOnUiThread(() ->
                                 Toast.makeText(
                                         this,
@@ -104,24 +108,20 @@ public class MainActivity extends AppCompatActivity {
     private void ensurePermissionsAndStart() {
         List<String> missing = new ArrayList<>();
 
-        if (ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.RECORD_AUDIO
-        ) != PackageManager.PERMISSION_GRANTED) {
+        if (Build.VERSION.SDK_INT >= 23 &&
+                checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                        != PackageManager.PERMISSION_GRANTED) {
             missing.add(Manifest.permission.RECORD_AUDIO);
         }
 
         if (Build.VERSION.SDK_INT >= 33 &&
-                ContextCompat.checkSelfPermission(
-                        this,
-                        Manifest.permission.POST_NOTIFICATIONS
-                ) != PackageManager.PERMISSION_GRANTED) {
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                        != PackageManager.PERMISSION_GRANTED) {
             missing.add(Manifest.permission.POST_NOTIFICATIONS);
         }
 
         if (!missing.isEmpty()) {
-            ActivityCompat.requestPermissions(
-                    this,
+            requestPermissions(
                     missing.toArray(new String[0]),
                     REQ_PERMISSIONS
             );
@@ -133,7 +133,13 @@ public class MainActivity extends AppCompatActivity {
 
     private void startVoiceService() {
         Intent intent = new Intent(this, VoiceService.class);
-        ContextCompat.startForegroundService(this, intent);
+
+        if (Build.VERSION.SDK_INT >= 26) {
+            startForegroundService(intent);
+        } else {
+            startService(intent);
+        }
+
         status.setText("\nServiço ativo — ouvindo");
     }
 
@@ -146,7 +152,7 @@ public class MainActivity extends AppCompatActivity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
 
         if (requestCode == REQ_PERMISSIONS) {
-            boolean allGranted = true;
+            boolean allGranted = grantResults.length > 0;
 
             for (int result : grantResults) {
                 if (result != PackageManager.PERMISSION_GRANTED) {
@@ -165,5 +171,11 @@ public class MainActivity extends AppCompatActivity {
                 ).show();
             }
         }
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (executor != null) executor.shutdownNow();
+        super.onDestroy();
     }
 }
